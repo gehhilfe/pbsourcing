@@ -8,9 +8,10 @@ import (
 	"iter"
 
 	pb "github.com/gehhilfe/pbsourcing/proto"
+	"github.com/google/uuid"
 )
 
-type Metadata map[string]interface{}
+type Metadata map[string]string
 
 func (m *Metadata) Scan(src any) error {
 	data, ok := src.([]uint8)
@@ -22,7 +23,7 @@ func (m *Metadata) Scan(src any) error {
 
 type Filter struct {
 	AggregateType *string
-	AggregateID   *string
+	AggregateID   *uuid.UUID
 	Metadata      *Metadata
 	StoreMetadata *Metadata
 }
@@ -54,12 +55,12 @@ type StoreManager interface {
 type SubStore interface {
 	Id() StoreId
 	Metadata() Metadata
-	Save(events []*pb.Event) error
+	Save(events []*pb.SubStoreEvent) error
 
 	// start is the non inclusive version to start from
-	All(storeVersion uint64) (iter.Seq[*pb.Event], error)
-	Get(ctx context.Context, id string, aggregateType string, afterVersion uint64) (iter.Seq[*pb.Event], error)
-	Append(event *pb.Event) error
+	All(storeVersion uint64) (iter.Seq[*pb.SubStoreEvent], error)
+	Get(ctx context.Context, id uuid.UUID, aggregateType string, afterVersion uint64) (iter.Seq[*pb.SubStoreEvent], error)
+	Append(event *pb.SubStoreEvent) error
 	LastVersion() uint64
 	UpdateMetadata(metadata Metadata) error
 }

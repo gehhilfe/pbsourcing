@@ -5,6 +5,7 @@ import (
 
 	"github.com/gehhilfe/pbsourcing"
 	pb "github.com/gehhilfe/pbsourcing/example/proto"
+	pbsourcingPb "github.com/gehhilfe/pbsourcing/proto"
 	"github.com/gehhilfe/pbsourcing/store/memory"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
@@ -18,11 +19,9 @@ func (u *User) EventType() proto.Message {
 	return &pb.FrequentFlierAccountEvent{}
 }
 
-func (u *User) Transition(event pbsourcing.Event) {
-	userEvent, ok := event.Data.(*pb.FrequentFlierAccountEvent)
-	if !ok {
-		panic("could not cast event")
-	}
+func (u *User) Transition(event *pbsourcingPb.SubStoreEvent) {
+	userEvent := pb.FrequentFlierAccountEvent{}
+	event.Data.UnmarshalTo(&userEvent)
 
 	switch userEvent.EventType.(type) {
 	case *pb.FrequentFlierAccountEvent_AccountCreated:
@@ -31,10 +30,6 @@ func (u *User) Transition(event pbsourcing.Event) {
 }
 
 func main() {
-	u := &User{}
-	r := pbsourcing.NewRegister()
-	e := pb.FrequentFlierAccountEvent{}
-	r.Register(u, &e)
 
 	created := pb.FrequentFlierAccountEvent{
 		EventType: &pb.FrequentFlierAccountEvent_AccountCreated{
@@ -51,10 +46,10 @@ func main() {
 		panic(err)
 	}
 
-	instance := r.Get(u)
-	err = proto.Unmarshal(data, instance.(proto.Message))
+	instance := &pb.FrequentFlierAccountEvent{}
+	err = proto.Unmarshal(data, instance)
 
-	v := instance.(*pb.FrequentFlierAccountEvent).GetAccountCreated()
+	v := instance.GetAccountCreated()
 	println(v.AccountId)
 	println(v.OpeningMiles)
 	println(v.OpeningTierPoints)
@@ -74,9 +69,9 @@ func main() {
 		panic(err)
 	}
 
-	instance = r.Get(u)
-	err = proto.Unmarshal(data, instance.(proto.Message))
-	v2 := instance.(*pb.FrequentFlierAccountEvent).GetAccountCreated()
+	instance = &pb.FrequentFlierAccountEvent{}
+	err = proto.Unmarshal(data, instance)
+	v2 := instance.GetAccountCreated()
 	println(v2.AccountId)
 	println(v2.OpeningMiles)
 	println(v2.OpeningTierPoints)
@@ -84,7 +79,7 @@ func main() {
 	sm := memory.NewStore()
 	store, _ := sm.Create(pbsourcing.StoreId(uuid.New()), pbsourcing.Metadata{"name": "storeA"})
 
-	repo := pbsourcing.NewEventRepository(r, store)
+	repo := pbsourcing.NewEventRepository(store)
 
 	nu := &User{}
 

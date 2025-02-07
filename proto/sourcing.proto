@@ -3,31 +3,37 @@ syntax = "proto3";
 option go_package = "github.com/gehhilfe/pbsourcing/proto";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/any.proto";
 
 package sourcing;
 
-message Event {
-  string store_id = 1;
-  string store_metadata = 2;
-  string aggregate_id = 3;
-  string aggregate_type = 4;
-  uint64 version = 5;
-  uint64 store_version = 6;
-  uint64 global_version = 7;
-  google.protobuf.Timestamp created_at = 8;
-  bytes data = 9;
-  string metadata = 10;
+message Id {
+  bytes id = 1;
 }
 
-message BusPaylod {
+message SubStoreEvent {
+  Id aggregate_id = 1;
+  string aggregate_type = 2;
+  uint64 aggregate_version = 3;
+  uint64 store_version = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Any data = 6;
+  map<string, string> metadata = 7;
+}
+
+message Event {
+  Id store_id = 1;
+  uint64 global_version = 2;
+  SubStoreEvent sub_store_event = 3;
+}
+
+message BusPayload {
   message Header {
-    string store_id = 1;
-    string store_metadata = 2;
+    Id store_id = 1;
   }
   
-  message CommitedEvent {
-    Header header = 1;
-    Event event = 2;
+  message CommittedEvent {
+    Event event = 1;
   }
 
   message RequestRsync {
@@ -37,7 +43,7 @@ message BusPaylod {
 
   message ResponseRsync {
     Header header = 1;
-    repeated Event events = 2;
+    repeated SubStoreEvent events = 2;
   }
 
   message HeartBeat {
@@ -46,7 +52,7 @@ message BusPaylod {
   }
 
   oneof payload {
-    CommitedEvent commited_event = 1;
+    CommittedEvent committed_event = 1;
     RequestRsync request_rsync = 2;
     ResponseRsync response_rsync = 3;
     HeartBeat heart_beat = 4;

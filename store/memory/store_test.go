@@ -7,7 +7,9 @@ import (
 	pb "github.com/gehhilfe/pbsourcing/proto"
 	"github.com/gehhilfe/pbsourcing/store/memory"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func Test(t *testing.T) {
@@ -49,14 +51,15 @@ func Test(t *testing.T) {
 	if ctr != 2 {
 		t.Errorf("unexpected store count: %v", ctr)
 	}
+	d, _ := anypb.New(wrapperspb.Bool(true))
 
-	storeA.Append(&pb.Event{
-		AggregateId:   "",
-		AggregateType: "",
-		Version:       1,
-		StoreVersion:  1,
-		CreatedAt:     timestamppb.Now(),
-		Data:          []byte{},
-		Metadata:      "",
+	storeA.Append(&pb.SubStoreEvent{
+		AggregateId:      &pb.Id{Id: storeAId[:]},
+		AggregateType:    "",
+		AggregateVersion: 1,
+		StoreVersion:     1,
+		CreatedAt:        timestamppb.Now(),
+		Data:             d,
+		Metadata:         pbsourcing.Metadata{"name": "storeA"},
 	})
 }

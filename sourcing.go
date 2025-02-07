@@ -2,7 +2,6 @@ package pbsourcing
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	pb "github.com/gehhilfe/pbsourcing/proto"
-	"github.com/google/uuid"
 )
 
 type SynchronizedStore struct {
@@ -29,10 +27,11 @@ func NewSynchronizedStore(manager StoreManager, bus MessageBus) *SynchronizedSto
 func (s *SynchronizedStore) Synchronize(ctx context.Context) error {
 	saveSub := s.manager.OnSave(func(store SubStore, events []*pb.Event) {
 		for _, event := range events {
-			payload := &pb.BusPaylod{
-				Payload: &pb.BusPaylod_CommitedEvent_{CommitedEvent: &pb.BusPaylod_CommitedEvent{
-					Event: event,
-				}},
+			payload := &pb.BusPayload{
+				Payload: &pb.BusPayload_CommittedEvent_{
+					CommittedEvent: &pb.BusPayload_CommittedEvent{
+						Event: event,
+					}},
 			}
 			err := s.bus.Publish(payload)
 			if err != nil {
@@ -53,11 +52,14 @@ func (s *SynchronizedStore) Synchronize(ctx context.Context) error {
 			}
 
 			for ss := range s.manager.List(Metadata{"type": "local"}) {
-				s.bus.Publish(&pb.BusPaylod{
-					Payload: &pb.BusPaylod_HeartBeat_{
-						HeartBeat: &pb.BusPaylod_HeartBeat{
-							Header: &pb.BusPaylod_Header{
-								StoreId: ss.Id().String(),
+				storeId := ss.Id()
+				s.bus.Publish(&pb.BusPayload{
+					Payload: &pb.BusPayload_HeartBeat_{
+						HeartBeat: &pb.BusPayload_HeartBeat{
+							Header: &pb.BusPayload_Header{
+								StoreId: &pb.Id{
+									Id: storeId[:],
+								},
 							},
 							LastStoreVersion: ss.LastVersion(),
 						},
@@ -67,16 +69,16 @@ func (s *SynchronizedStore) Synchronize(ctx context.Context) error {
 		}
 	}()
 
-	busSub, err := s.bus.Subscribe(func(payload *pb.BusPaylod, metadata Metadata) error {
+	busSub, err := s.bus.Subscribe(func(payload *pb.BusPayload, metadata Metadata) error {
 		switch p := payload.Payload.(type) {
-		case *pb.BusPaylod_CommitedEvent_:
-			return s.commitedReceived(p.CommitedEvent, metadata)
-		case *pb.BusPaylod_RequestRsync_:
+		case *pb.BusPayload_CommittedEvent_:
+			return s.committedReceived(p.CommittedEvent, metadata)
+		case *pb.BusPayload_RequestRsync_:
 			return s.requestResyncReceived(p.RequestRsync, metadata)
-		case *pb.BusPaylod_ResponseRsync_:
+		case *pb.BusPayload_ResponseRsync_:
 			return s.resyncEventsReceived(p.ResponseRsync, metadata)
-		case *pb.BusPaylod_HeartBeat_:
-
+		case *pb.BusPayload_HeartBeat_:
+			return s.heartBeatReceived(p.HeartBeat, metadata)
 		}
 		return nil
 	})
@@ -89,14 +91,13 @@ func (s *SynchronizedStore) Synchronize(ctx context.Context) error {
 	return nil
 }
 
-func (s *SynchronizedStore) commitedReceived(m *pb.BusPaylod_CommitedEvent, busMetadata Metadata) error {
-
+func (s *SynchronizedStore) committedReceived(m *pb.BusPayload_CommittedEvent, busMetadata Metadata) error {
+	slog.Info("committed event received", slog.Any("event", m.Event))
 	// Get the store
-	storeId := StoreId(uuid.MustParse(m.Event.StoreId))
+	storeId := StoreId(m.Event.StoreId.Id)
 	store, err := s.manager.Get(storeId)
 	if errors.Is(err, ErrStoreNotFound) {
 		metadata := Metadata{}
-		json.Unmarshal([]byte(m.Event.StoreMetadata), &metadata)
 		metadata["type"] = "remote"
 		for k, v := range busMetadata {
 			if k != "type" {
@@ -116,15 +117,17 @@ func (s *SynchronizedStore) commitedReceived(m *pb.BusPaylod_CommitedEvent, busM
 		return nil
 	}
 
-	err = store.Append(m.Event)
+	err = store.Append(m.Event.SubStoreEvent)
 	ooo := &EventOutOfOrderError{}
 	if errors.As(err, &ooo) {
 		slog.Warn("event out of order", slog.Any("store", ooo.StoreId), slog.Any("expected", ooo.Expected), slog.Any("actual", ooo.Actual))
 		// Request resync
-		s.bus.Publish(&pb.BusPaylod{
-			Payload: &pb.BusPaylod_RequestRsync_{RequestRsync: &pb.BusPaylod_RequestRsync{
-				Header: &pb.BusPaylod_Header{
-					StoreId: m.Event.StoreId,
+		s.bus.Publish(&pb.BusPayload{
+			Payload: &pb.BusPayload_RequestRsync_{RequestRsync: &pb.BusPayload_RequestRsync{
+				Header: &pb.BusPayload_Header{
+					StoreId: &pb.Id{
+						Id: storeId[:],
+					},
 				},
 				From: ooo.Expected - 1, // The last version we have
 			}},
@@ -134,9 +137,9 @@ func (s *SynchronizedStore) commitedReceived(m *pb.BusPaylod_CommitedEvent, busM
 	return nil
 }
 
-func (s *SynchronizedStore) requestResyncReceived(m *pb.BusPaylod_RequestRsync, busMetadata Metadata) error {
+func (s *SynchronizedStore) requestResyncReceived(m *pb.BusPayload_RequestRsync, busMetadata Metadata) error {
 	_ = busMetadata
-	storeId := StoreId(uuid.MustParse(m.Header.StoreId))
+	storeId := StoreId(m.Header.StoreId.Id)
 	store, err := s.manager.Get(storeId)
 	if errors.Is(err, ErrStoreNotFound) {
 		return nil
@@ -157,8 +160,8 @@ func (s *SynchronizedStore) requestResyncReceived(m *pb.BusPaylod_RequestRsync, 
 	batchSize := 10
 
 	for events := range chunk(iterator, batchSize) {
-		s.bus.Publish(&pb.BusPaylod{
-			Payload: &pb.BusPaylod_ResponseRsync_{ResponseRsync: &pb.BusPaylod_ResponseRsync{
+		s.bus.Publish(&pb.BusPayload{
+			Payload: &pb.BusPayload_ResponseRsync_{ResponseRsync: &pb.BusPayload_ResponseRsync{
 				Events: events,
 			}},
 		})
@@ -167,8 +170,8 @@ func (s *SynchronizedStore) requestResyncReceived(m *pb.BusPaylod_RequestRsync, 
 	return nil
 }
 
-func (s *SynchronizedStore) resyncEventsReceived(m *pb.BusPaylod_ResponseRsync, busMetadata Metadata) error {
-	storeId := StoreId(uuid.MustParse(m.Header.StoreId))
+func (s *SynchronizedStore) resyncEventsReceived(m *pb.BusPayload_ResponseRsync, busMetadata Metadata) error {
+	storeId := StoreId(m.Header.StoreId.Id)
 	store, err := s.manager.Get(storeId)
 	if errors.Is(err, ErrStoreNotFound) {
 		metadata := Metadata{"type": "remote"}
@@ -217,12 +220,12 @@ func chunk[E any](seq iter.Seq[E], size int) iter.Seq[[]E] {
 	}
 }
 
-func (s *SynchronizedStore) heartBeatReceived(m *pb.BusPaylod_HeartBeat, busMetadata Metadata) error {
+func (s *SynchronizedStore) heartBeatReceived(m *pb.BusPayload_HeartBeat, busMetadata Metadata) error {
 	if m.LastStoreVersion == 0 {
 		return nil
 	}
 
-	storeId := StoreId(uuid.MustParse(m.Header.StoreId))
+	storeId := StoreId(m.Header.StoreId.Id)
 	store, err := s.manager.Get(storeId)
 	if errors.Is(err, ErrStoreNotFound) {
 		// create store
@@ -236,9 +239,9 @@ func (s *SynchronizedStore) heartBeatReceived(m *pb.BusPaylod_HeartBeat, busMeta
 		if err != nil {
 			return nil
 		}
-		s.bus.Publish(&pb.BusPaylod{
-			Payload: &pb.BusPaylod_RequestRsync_{RequestRsync: &pb.BusPaylod_RequestRsync{
-				Header: &pb.BusPaylod_Header{
+		s.bus.Publish(&pb.BusPayload{
+			Payload: &pb.BusPayload_RequestRsync_{RequestRsync: &pb.BusPayload_RequestRsync{
+				Header: &pb.BusPayload_Header{
 					StoreId: m.Header.StoreId,
 				},
 				From: 0,
@@ -265,9 +268,9 @@ func (s *SynchronizedStore) heartBeatReceived(m *pb.BusPaylod_HeartBeat, busMeta
 	}
 
 	if m.LastStoreVersion > store.LastVersion() {
-		s.bus.Publish(&pb.BusPaylod{
-			Payload: &pb.BusPaylod_RequestRsync_{RequestRsync: &pb.BusPaylod_RequestRsync{
-				Header: &pb.BusPaylod_Header{
+		s.bus.Publish(&pb.BusPayload{
+			Payload: &pb.BusPayload_RequestRsync_{RequestRsync: &pb.BusPayload_RequestRsync{
+				Header: &pb.BusPayload_Header{
 					StoreId: m.Header.StoreId,
 				},
 				From: store.LastVersion(),

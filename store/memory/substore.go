@@ -2,19 +2,19 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"iter"
 	"sync"
 
 	"github.com/gehhilfe/pbsourcing"
 	pb "github.com/gehhilfe/pbsourcing/proto"
+	"github.com/google/uuid"
 )
 
 type aggregateBucket struct {
-	aggregateId   string
+	aggregateId   uuid.UUID
 	aggregateType string
-	events        []*pb.Event
+	events        []*pb.SubStoreEvent
 }
 
 type SubStore struct {
@@ -26,12 +26,12 @@ type SubStore struct {
 	manager *StoreManager
 
 	storeVersion uint64
-	storeEvents  []*pb.Event
-	aggregates   map[string]*aggregateBucket
+	storeEvents  []*pb.SubStoreEvent
+	aggregates   map[uuid.UUID]*aggregateBucket
 }
 
 // Save implements pbsourcing.SubStore.
-func (s *SubStore) Save(events []*pb.Event) error {
+func (s *SubStore) Save(events []*pb.SubStoreEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -40,14 +40,14 @@ func (s *SubStore) Save(events []*pb.Event) error {
 	}
 
 	aggregateType := events[0].AggregateType
-	aggregateId := events[0].AggregateId
+	aggregateId := uuid.UUID(events[0].AggregateId.Id)
 
 	bucket, ok := s.aggregates[aggregateId]
 	if !ok {
 		s.aggregates[aggregateId] = &aggregateBucket{
 			aggregateId:   aggregateId,
 			aggregateType: aggregateType,
-			events:        make([]*pb.Event, 0),
+			events:        make([]*pb.SubStoreEvent, 0),
 		}
 		bucket = s.aggregates[aggregateId]
 	}
@@ -55,40 +55,41 @@ func (s *SubStore) Save(events []*pb.Event) error {
 	curStoreVersion := s.storeVersion
 	curBucketVersion := uint64(len(bucket.events))
 
-	sMetadata, err := json.Marshal(s.metadata)
-	if err != nil {
-		return err
-	}
+	gEvents := make([]*pb.Event, 0, len(events))
 
 	for i, event := range events {
 		storeVersion := curStoreVersion + uint64(i) + 1
 		bucketVersion := curBucketVersion + uint64(i) + 1
 
-		if event.Version != bucketVersion {
+		if event.AggregateVersion != bucketVersion {
 			return pbsourcing.ErrConcurrency
 		}
 
+		gEvent := &pb.Event{}
 		event.StoreVersion = storeVersion
-		event.StoreId = s.id.String()
-		event.StoreMetadata = string(sMetadata)
-		event.GlobalVersion = uint64(len(s.manager.globalStore) + 1)
+		gEvent.SubStoreEvent = event
+		gEvent.StoreId = &pb.Id{Id: s.id[:]}
+		gEvent.GlobalVersion = uint64(len(s.manager.globalStore) + 1)
 
 		bucket.events = append(bucket.events, event)
 		s.storeEvents = append(s.storeEvents, event)
-		s.manager.globalStore = append(s.manager.globalStore, event)
+		gEvents = append(gEvents, gEvent)
+		s.manager.globalStore = append(s.manager.globalStore, gEvent)
+
+		s.storeVersion = storeVersion
 	}
 
-	go s.manager.saved(s, events)
+	go s.manager.saved(s, gEvents)
 	return nil
 }
 
-func (s *SubStore) Get(ctx context.Context, id string, aggregateType string, afterVersion uint64) (iter.Seq[*pb.Event], error) {
+func (s *SubStore) Get(ctx context.Context, id uuid.UUID, aggregateType string, afterVersion uint64) (iter.Seq[*pb.SubStoreEvent], error) {
 	bucket, ok := s.aggregates[id]
 	if !ok {
 		return nil, errors.New("no aggregate event stream")
 	}
 
-	return func(yield func(*pb.Event) bool) {
+	return func(yield func(*pb.SubStoreEvent) bool) {
 		for _, event := range bucket.events[afterVersion:] {
 			if !yield(event) {
 				return
@@ -98,9 +99,9 @@ func (s *SubStore) Get(ctx context.Context, id string, aggregateType string, aft
 }
 
 // All implements pbsourcing.SubStore.
-func (s *SubStore) All(start uint64) (iter.Seq[*pb.Event], error) {
+func (s *SubStore) All(start uint64) (iter.Seq[*pb.SubStoreEvent], error) {
 	s.mu.RLock()
-	return func(yield func(*pb.Event) bool) {
+	return func(yield func(*pb.SubStoreEvent) bool) {
 		defer s.mu.RUnlock()
 
 		for _, event := range s.storeEvents[start:] {
@@ -112,7 +113,7 @@ func (s *SubStore) All(start uint64) (iter.Seq[*pb.Event], error) {
 }
 
 // Append implements pbsourcing.SubStore.
-func (s *SubStore) Append(event *pb.Event) error {
+func (s *SubStore) Append(event *pb.SubStoreEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -128,21 +129,21 @@ func (s *SubStore) Append(event *pb.Event) error {
 		}
 	}
 
-	aggregateId := event.AggregateId
+	aggregateId := uuid.UUID(event.AggregateId.Id)
 	bucket, ok := s.aggregates[aggregateId]
 	if !ok {
 		s.aggregates[aggregateId] = &aggregateBucket{
 			aggregateId:   aggregateId,
 			aggregateType: event.AggregateType,
-			events:        make([]*pb.Event, 0),
+			events:        make([]*pb.SubStoreEvent, 0),
 		}
 		bucket = s.aggregates[aggregateId]
 	}
 
 	nextAggregateVersion := uint64(len(bucket.events) + 1)
-	if event.Version < nextAggregateVersion {
+	if event.AggregateVersion < nextAggregateVersion {
 		return pbsourcing.ErrEventExists
-	} else if event.Version > nextAggregateVersion {
+	} else if event.AggregateVersion > nextAggregateVersion {
 		return &pbsourcing.EventOutOfOrderError{
 			StoreId:  s.id,
 			Expected: nextStoreVersion,
@@ -150,17 +151,19 @@ func (s *SubStore) Append(event *pb.Event) error {
 		}
 	}
 
-	event.StoreId = s.id.String()
-	sMetadata, err := json.Marshal(s.metadata)
-	if err != nil {
-		return err
-	}
-
-	event.StoreMetadata = string(sMetadata)
-	event.GlobalVersion = uint64(len(s.manager.globalStore) + 1)
 	bucket.events = append(bucket.events, event)
 	s.storeEvents = append(s.storeEvents, event)
-	s.manager.globalStore = append(s.manager.globalStore, event)
+
+	gEvent := &pb.Event{
+		StoreId: &pb.Id{
+			Id: s.id[:],
+		},
+		GlobalVersion: uint64(len(s.manager.globalStore) + 1),
+		SubStoreEvent: event,
+	}
+
+	s.manager.globalStore = append(s.manager.globalStore, gEvent)
+	s.storeVersion = nextStoreVersion
 
 	return nil
 }

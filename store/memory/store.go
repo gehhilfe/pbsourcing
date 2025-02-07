@@ -1,12 +1,12 @@
 package memory
 
 import (
-	"encoding/json"
 	"iter"
 	"sync"
 
 	"github.com/gehhilfe/pbsourcing"
 	pb "github.com/gehhilfe/pbsourcing/proto"
+	"github.com/google/uuid"
 )
 
 type StoreManager struct {
@@ -27,33 +27,35 @@ func (s *StoreManager) All(globalVersion uint64, filter pbsourcing.Filter) (iter
 			return
 		}
 	eventLoop:
-		for _, event := range s.globalStore[globalVersion:] {
-			if filter.AggregateType != nil && event.AggregateType != *filter.AggregateType {
+		for _, gEntry := range s.globalStore[globalVersion:] {
+			if filter.AggregateType != nil && gEntry.SubStoreEvent.AggregateType != *filter.AggregateType {
 				continue eventLoop
 			}
-			if filter.AggregateID != nil && event.AggregateId != *filter.AggregateID {
+			if filter.AggregateID != nil && uuid.UUID(gEntry.SubStoreEvent.AggregateId.Id) != *filter.AggregateID {
 				continue eventLoop
 			}
 			if filter.Metadata != nil {
-				metadata := pbsourcing.Metadata{}
-				_ = json.Unmarshal([]byte(event.Metadata), &metadata)
 				for k, v := range *filter.Metadata {
-					if metadata[k] != v {
-						continue eventLoop
-					}
-				}
-			}
-			if filter.StoreMetadata != nil {
-				metadata := pbsourcing.Metadata{}
-				_ = json.Unmarshal([]byte(event.StoreMetadata), &metadata)
-				for k, v := range *filter.StoreMetadata {
-					if metadata[k] != v {
+					if gEntry.SubStoreEvent.Metadata[k] != v {
 						continue eventLoop
 					}
 				}
 			}
 
-			if !yield(event) {
+			store := s.stores[pbsourcing.StoreId(gEntry.StoreId.Id)]
+			if store == nil {
+				return
+			}
+
+			if filter.StoreMetadata != nil {
+				for k, v := range *filter.StoreMetadata {
+					if store.metadata[k] != v {
+						continue eventLoop
+					}
+				}
+			}
+
+			if !yield(gEntry) {
 				return
 			}
 		}
@@ -74,8 +76,8 @@ func (s *StoreManager) Create(id pbsourcing.StoreId, metadata pbsourcing.Metadat
 		metadata:     metadata,
 		manager:      s,
 		storeVersion: 0,
-		storeEvents:  make([]*pb.Event, 0),
-		aggregates:   make(map[string]*aggregateBucket),
+		storeEvents:  make([]*pb.SubStoreEvent, 0),
+		aggregates:   make(map[uuid.UUID]*aggregateBucket),
 	}
 
 	s.stores[id] = store
@@ -114,7 +116,6 @@ func (s *StoreManager) List(metadata pbsourcing.Metadata) iter.Seq[pbsourcing.Su
 }
 
 func (s *StoreManager) saved(store pbsourcing.SubStore, events []*pb.Event) {
-	s.globalStore = append(s.globalStore, events...)
 	for _, handler := range s.onSaveHandlers {
 		handler(store, events)
 	}

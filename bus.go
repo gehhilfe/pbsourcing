@@ -2,6 +2,7 @@ package pbsourcing
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 
 	pb "github.com/gehhilfe/pbsourcing/proto"
@@ -18,34 +19,33 @@ func (u UnsubscribeFunc) Unsubscribe() error {
 }
 
 type MessageBus interface {
-	Publish(payload *pb.BusPaylod) error
-	Subscribe(handler func(*pb.BusPaylod, Metadata) error) (Unsubscriber, error)
+	Publish(payload *pb.BusPayload) error
+	Subscribe(handler func(*pb.BusPayload, Metadata) error) (Unsubscriber, error)
 }
 
 type InMemoryMessageBus struct {
 	mu            sync.RWMutex
-	subscriptions []func(message *pb.BusPaylod, metadata Metadata) error
+	subscriptions []func(message *pb.BusPayload, metadata Metadata) error
 }
 
 func NewInMemoryMessageBus() *InMemoryMessageBus {
 	return &InMemoryMessageBus{
-		subscriptions: make([]func(message *pb.BusPaylod, metadata Metadata) error, 0),
+		subscriptions: make([]func(message *pb.BusPayload, metadata Metadata) error, 0),
 	}
 }
 
-func (b *InMemoryMessageBus) Publish(payload *pb.BusPaylod) error {
+func (b *InMemoryMessageBus) Publish(payload *pb.BusPayload) error {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
+	slog.Info("publishing message", slog.Any("payload", payload))
 	for _, handler := range b.subscriptions {
-		if err := handler(payload, Metadata{}); err != nil {
-			return err
-		}
+		go handler(payload, Metadata{})
 	}
 	return nil
 }
 
-func (b *InMemoryMessageBus) Subscribe(handler func(message *pb.BusPaylod, metadata Metadata) error) (Unsubscriber, error) {
+func (b *InMemoryMessageBus) Subscribe(handler func(message *pb.BusPayload, metadata Metadata) error) (Unsubscriber, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -58,7 +58,7 @@ func (b *InMemoryMessageBus) Subscribe(handler func(message *pb.BusPaylod, metad
 
 type unsubscriber struct {
 	bus     *InMemoryMessageBus
-	handler *func(message *pb.BusPaylod, metadata Metadata) error
+	handler *func(message *pb.BusPayload, metadata Metadata) error
 }
 
 func (u *unsubscriber) Unsubscribe() error {
