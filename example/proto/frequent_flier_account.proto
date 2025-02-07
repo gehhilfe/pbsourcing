@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+option go_package = "github.com/gehhilfe/pbsourcing/example/proto";
+
+message FrequentFlierAccountEvent {
+  oneof event_type {
+    FrequentFlierAccountCreated account_created = 1;
+    StatusMatched status_matched = 2;
+    PromotedToGoldStatus promoted_to_gold_status = 3;
+  }
+}
+
+message FrequentFlierAccountCreated {
+  string account_id = 1;
+  int32 opening_miles = 2;
+  int32 opening_tier_points = 3;
+}
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_RED = 1;
+  STATUS_SILVER = 2;
+  STATUS_GOLD = 3;
+}
+
+message StatusMatched {
+  Status new_status = 1;
+}
+
+// Newly added event
+message FlightTaken {
+  int32 miles_added = 1;
+  int32 tier_points_added = 2;
+}
+
+message PromotedToGoldStatus {}

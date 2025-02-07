@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+option go_package = "github.com/gehhilfe/pbsourcing/proto";
+
+import "google/protobuf/timestamp.proto";
+
+package sourcing;
+
+message Event {
+  string aggregate_id = 1;
+  string aggregate_type = 2;
+  uint64 version = 3;
+  uint64 global_version = 4;
+  google.protobuf.Timestamp created_at = 5;
+  bytes data = 6;
+  string metadata = 7;
+}
