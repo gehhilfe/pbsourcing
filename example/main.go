@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
+
 	"github.com/gehhilfe/pbsourcing"
 	pb "github.com/gehhilfe/pbsourcing/example/proto"
+	"github.com/gehhilfe/pbsourcing/store/memory"
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -77,7 +81,10 @@ func main() {
 	println(v2.OpeningMiles)
 	println(v2.OpeningTierPoints)
 
-	repo := pbsourcing.NewEventRepository(r, pbsourcing.NewMemoryStore())
+	sm := memory.NewStore()
+	store, _ := sm.Create(pbsourcing.StoreId(uuid.New()), pbsourcing.Metadata{"name": "storeA"})
+
+	repo := pbsourcing.NewEventRepository(r, store)
 
 	nu := &User{}
 
@@ -97,4 +104,7 @@ func main() {
 	})
 
 	err = repo.Save(nu)
+	id := nu.AggregateRoot.ID()
+	nu = &User{}
+	err = repo.Load(context.Background(), id, nu)
 }

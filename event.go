@@ -10,13 +10,16 @@ import (
 )
 
 type Event struct {
+	StoreId       string
+	StoreMetadata Metadata
+	StoreVersion  uint64
 	AggregateId   string
 	AggregateType string
 	Version       uint64
 	GlobalVersion uint64
 	CreatedAt     time.Time
 	Data          proto.Message
-	Metadata      map[string]interface{}
+	Metadata      Metadata
 }
 
 func (e *Event) ToPb() (*pb.Event, error) {
@@ -30,7 +33,15 @@ func (e *Event) ToPb() (*pb.Event, error) {
 		return nil, err
 	}
 
+	eStoreMetadata, err := json.Marshal(e.StoreMetadata)
+	if err != nil {
+		return nil, err
+	}
+
 	return &pb.Event{
+		StoreId:       e.StoreId,
+		StoreMetadata: string(eStoreMetadata),
+		StoreVersion:  e.StoreVersion,
 		AggregateId:   e.AggregateId,
 		AggregateType: e.AggregateType,
 		Version:       e.Version,

@@ -7,11 +7,48 @@ import "google/protobuf/timestamp.proto";
 package sourcing;
 
 message Event {
-  string aggregate_id = 1;
-  string aggregate_type = 2;
-  uint64 version = 3;
-  uint64 global_version = 4;
-  google.protobuf.Timestamp created_at = 5;
-  bytes data = 6;
-  string metadata = 7;
+  string store_id = 1;
+  string store_metadata = 2;
+  string aggregate_id = 3;
+  string aggregate_type = 4;
+  uint64 version = 5;
+  uint64 store_version = 6;
+  uint64 global_version = 7;
+  google.protobuf.Timestamp created_at = 8;
+  bytes data = 9;
+  string metadata = 10;
+}
+
+message BusPaylod {
+  message Header {
+    string store_id = 1;
+    string store_metadata = 2;
+  }
+  
+  message CommitedEvent {
+    Header header = 1;
+    Event event = 2;
+  }
+
+  message RequestRsync {
+    Header header = 1;
+    uint64 from = 2;
+  }
+
+  message ResponseRsync {
+    Header header = 1;
+    repeated Event events = 2;
+  }
+
+  message HeartBeat {
+    Header header = 1;
+    uint64 last_store_version = 2;
+  }
+
+  oneof payload {
+    CommitedEvent commited_event = 1;
+    RequestRsync request_rsync = 2;
+    ResponseRsync response_rsync = 3;
+    HeartBeat heart_beat = 4;
+  }
 }

@@ -2,27 +2,29 @@ package pbsourcing
 
 import (
 	"reflect"
+
+	"google.golang.org/protobuf/proto"
 )
 
 type Register struct {
-	registerd map[string]func() interface{}
+	registerd map[string]func() proto.Message
 }
 
 func NewRegister() Register {
 	return Register{
-		registerd: make(map[string]func() interface{}),
+		registerd: make(map[string]func() proto.Message),
 	}
 }
 
-func (r *Register) Get(a aggregate) interface{} {
+func (r *Register) Get(a aggregate) proto.Message {
 	return r.registerd[aggregateType(a)]()
 }
 
-func (r *Register) Register(a aggregate, pbEventMessage interface{}) {
+func (r *Register) Register(a aggregate, pbEventMessage proto.Message) {
 	t := reflect.TypeOf(pbEventMessage).Elem()
-	r.registerd[aggregateType(a)] = func() interface{} {
+	r.registerd[aggregateType(a)] = func() proto.Message {
 		n := reflect.New(t)
-		return n.Interface()
+		return n.Interface().(proto.Message)
 	}
 }
 

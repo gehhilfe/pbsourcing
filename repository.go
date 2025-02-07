@@ -1,6 +1,8 @@
 package pbsourcing
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -17,10 +19,10 @@ type aggregate interface {
 
 type EventRepository struct {
 	register   Register
-	eventStore Store
+	eventStore SubStore
 }
 
-func NewEventRepository(register Register, store Store) *EventRepository {
+func NewEventRepository(register Register, store SubStore) *EventRepository {
 	return &EventRepository{
 		register:   register,
 		eventStore: store,
@@ -28,7 +30,7 @@ func NewEventRepository(register Register, store Store) *EventRepository {
 }
 
 func (er *EventRepository) Save(a aggregate) error {
-	var esEvents = make([]pb.Event, 0)
+	var esEvents = make([]*pb.Event, 0)
 
 	if !er.register.AggregateRegistered(a) {
 		return errors.New("aggregate not registered")
@@ -46,7 +48,7 @@ func (er *EventRepository) Save(a aggregate) error {
 			return fmt.Errorf("error converting event to pb: %w", err)
 		}
 
-		esEvents = append(esEvents, *pbEvent)
+		esEvents = append(esEvents, pbEvent)
 	}
 
 	err := er.eventStore.Save(esEvents)
@@ -61,5 +63,47 @@ func (er *EventRepository) Save(a aggregate) error {
 
 	// update the internal aggregate state
 	root.update()
+	return nil
+}
+
+func (er *EventRepository) Load(ctx context.Context, id string, a aggregate) error {
+	it, err := er.eventStore.Get(ctx, id, aggregateType(a), 0)
+	if err != nil {
+		return fmt.Errorf("error getting events from store: %w", err)
+	}
+
+	for e := range it {
+		// convert pb event to internal event
+		event := &Event{
+			StoreId:       id,
+			StoreMetadata: Metadata{},
+			StoreVersion:  e.StoreVersion,
+			AggregateId:   id,
+			AggregateType: e.AggregateType,
+			Version:       e.Version,
+			GlobalVersion: e.GlobalVersion,
+			CreatedAt:     e.CreatedAt.AsTime(),
+			Data:          nil,
+			Metadata:      Metadata{},
+		}
+
+		err := json.Unmarshal([]byte(e.Metadata), &event.Metadata)
+		if err != nil {
+			return fmt.Errorf("error unmarshalling metadata: %w", err)
+		}
+
+		err = json.Unmarshal([]byte(e.StoreMetadata), &event.StoreMetadata)
+		if err != nil {
+			return fmt.Errorf("error unmarshalling store metadata: %w", err)
+		}
+
+		event.Data = er.register.Get(a)
+		err = proto.Unmarshal(e.Data, event.Data)
+		if err != nil {
+			return fmt.Errorf("error unmarshalling data: %w", err)
+		}
+
+		a.Transition(*event)
+	}
 	return nil
 }

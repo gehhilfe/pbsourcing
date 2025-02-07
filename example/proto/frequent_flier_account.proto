@@ -7,6 +7,7 @@ message FrequentFlierAccountEvent {
     FrequentFlierAccountCreated account_created = 1;
     StatusMatched status_matched = 2;
     PromotedToGoldStatus promoted_to_gold_status = 3;
+    FlightTaken flight_taken = 4;
   }
 }
 
